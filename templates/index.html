@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>EEG Waveform Visualizer</title>
-    <!-- Plotly CDN -->
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         body {
@@ -13,24 +12,13 @@
             background: #020617;
             color: #f9fafb;
         }
-
         .container {
             max-width: 1100px;
             margin: 0 auto;
             padding: 24px 16px 48px;
         }
-
-        h1 {
-            text-align: center;
-            margin-bottom: 8px;
-        }
-
-        .subtitle {
-            text-align: center;
-            margin-bottom: 24px;
-            opacity: 0.8;
-        }
-
+        h1 { text-align: center; margin-bottom: 8px; }
+        .subtitle { text-align: center; margin-bottom: 24px; opacity: 0.8; }
         .card {
             background: #020617;
             border-radius: 16px;
@@ -39,26 +27,19 @@
             border: 1px solid #1f2937;
             box-shadow: 0 10px 35px rgba(0, 0, 0, 0.6);
         }
-
         .form-row {
             display: flex;
             flex-wrap: wrap;
             gap: 12px;
             align-items: flex-end;
         }
-
         .field {
             flex: 1 1 200px;
             display: flex;
             flex-direction: column;
             gap: 4px;
         }
-
-        label {
-            font-size: 0.9rem;
-            opacity: 0.9;
-        }
-
+        label { font-size: 0.9rem; opacity: 0.9; }
         select {
             padding: 8px 10px;
             border-radius: 10px;
@@ -66,7 +47,6 @@
             background: #020617;
             color: #f9fafb;
         }
-
         button {
             padding: 10px 16px;
             border-radius: 999px;
@@ -79,31 +59,11 @@
             box-shadow: 0 10px 30px rgba(37, 99, 235, 0.6);
             white-space: nowrap;
         }
+        button:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+        #status { margin-top: 8px; font-size: 0.9rem; min-height: 1.2em; }
 
-        button:disabled {
-            opacity: 0.5;
-            cursor: default;
-            box-shadow: none;
-        }
-
-        #status {
-            margin-top: 8px;
-            font-size: 0.9rem;
-            min-height: 1.2em;
-        }
-
-        .visualizer-wrapper {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-
-        .channel-row {
-            display: flex;
-            align-items: stretch;
-            gap: 12px;
-        }
-
+        .visualizer-wrapper { display: flex; flex-direction: column; gap: 16px; }
+        .channel-row { display: flex; align-items: stretch; gap: 12px; }
         .channel-label {
             width: 150px;
             display: flex;
@@ -113,25 +73,11 @@
             padding-right: 8px;
             font-size: 0.88rem;
         }
+        .channel-label-name { font-weight: 600; }
+        .channel-label-value { font-size: 0.8rem; opacity: 0.8; }
+        .channel-chart { flex: 1; height: 170px; }
 
-        .channel-label-name {
-            font-weight: 600;
-        }
-
-        .channel-label-value {
-            font-size: 0.8rem;
-            opacity: 0.8;
-        }
-
-        .channel-chart {
-            flex: 1;
-            height: 170px; /* per-channel chart height */
-        }
-
-        .legend-row {
-            margin-top: 8px;
-        }
-
+        .legend-row { margin-top: 8px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
         .legend-label {
             display: inline-flex;
             align-items: center;
@@ -140,27 +86,33 @@
             margin-right: 10px;
             opacity: 0.8;
         }
-
-        .legend-color {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
+        .legend-color { width: 10px; height: 10px; border-radius: 50%; }
+        .toggle-wrapper {
+            margin-left: auto;
+            font-size: 0.85rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .toggle-wrapper input {
+            accent-color: #4f46e5;
         }
 
         @media (max-width: 720px) {
-            .channel-row {
-                flex-direction: column;
-            }
-
+            .channel-row { flex-direction: column; }
             .channel-label {
                 width: 100%;
                 align-items: flex-start;
                 padding-right: 0;
                 padding-bottom: 4px;
             }
-
-            .channel-chart {
-                height: 160px;
+            .channel-chart { height: 160px; }
+            .legend-row {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .toggle-wrapper {
+                margin-left: 0;
             }
         }
     </style>
@@ -169,7 +121,7 @@
 <div class="container">
     <h1>EEG Waveform Visualizer</h1>
     <p class="subtitle">
-        Select a sample EEG file and song, then click <strong>Visualize</strong> to see the 4-channel brainwave trace.
+        Select a sample EEG CSV file and (optionally) a song, then click <strong>Visualize</strong>.
     </p>
 
     <!-- Controls card -->
@@ -186,7 +138,7 @@
                 </div>
 
                 <div class="field">
-                    <label for="song-select">Sample song</label>
+                    <label for="song-select">Song</label>
                     <select id="song-select" name="song_file">
                         {% for label, filename in song_files.items() %}
                         <option value="{{ label }}">{{ label }} ({{ filename }})</option>
@@ -202,14 +154,13 @@
         </form>
     </div>
 
-    <!-- Chart card -->
+    <!-- Visualizer card -->
     <div class="card">
         <h3 style="text-align:center; margin-top:4px; margin-bottom:12px;">
             EEG Raw Channels (Dynamic Playback)
         </h3>
 
         <div class="visualizer-wrapper">
-            <!-- CH1 row -->
             <div class="channel-row">
                 <div class="channel-label">
                     <div class="channel-label-name">CH1 – Left Temporal</div>
@@ -218,7 +169,6 @@
                 <div class="channel-chart" id="ch1-chart"></div>
             </div>
 
-            <!-- CH2 row -->
             <div class="channel-row">
                 <div class="channel-label">
                     <div class="channel-label-name">CH2 – Left Frontal</div>
@@ -227,7 +177,6 @@
                 <div class="channel-chart" id="ch2-chart"></div>
             </div>
 
-            <!-- CH3 row -->
             <div class="channel-row">
                 <div class="channel-label">
                     <div class="channel-label-name">CH3 – Right Frontal</div>
@@ -236,7 +185,6 @@
                 <div class="channel-chart" id="ch3-chart"></div>
             </div>
 
-            <!-- CH4 row -->
             <div class="channel-row">
                 <div class="channel-label">
                     <div class="channel-label-name">CH4 – Right Temporal</div>
@@ -259,6 +207,12 @@
             <span class="legend-label">
                 <span class="legend-color" style="background:#f97316;"></span>CH4 – Right Temporal
             </span>
+
+            <!-- New toggle -->
+            <label class="toggle-wrapper">
+                <input type="checkbox" id="lock-y-toggle">
+                <span>Lock y-axis scales across channels</span>
+            </label>
         </div>
     </div>
 </div>
@@ -267,18 +221,31 @@
     const form = document.getElementById("control-form");
     const visualizeBtn = document.getElementById("visualize-btn");
     const statusEl = document.getElementById("status");
+    const lockYToggle = document.getElementById("lock-y-toggle");
 
-    const WINDOW_SEC = 20;   // width of visible time window
-    const UNIT = "µV";
+    const WINDOW_SEC = 20;      // visible x-window width
+    const UNIT = "µV";          // vertical units
 
     let animationTimer = null;
 
-    const channels = [
-        { id: "ch1", name: "CH1", color: "#22c55e" },
-        { id: "ch2", name: "CH2", color: "#3b82f6" },
-        { id: "ch3", name: "CH3", color: "#eab308" },
-        { id: "ch4", name: "CH4", color: "#f97316" }
-    ];
+    // Track per-channel min/max for dynamic y-scaling
+    let yMins = [Infinity, Infinity, Infinity, Infinity];
+    let yMaxes = [-Infinity, -Infinity, -Infinity, -Infinity];
+
+    // Whether to use a global y-scale across channels
+    let lockYScales = false;
+
+    lockYToggle.addEventListener("change", () => {
+        lockYScales = lockYToggle.checked;
+        // When toggled mid-playback, recompute ranges immediately
+        const chartDivs = [
+            document.getElementById("ch1-chart"),
+            document.getElementById("ch2-chart"),
+            document.getElementById("ch3-chart"),
+            document.getElementById("ch4-chart")
+        ];
+        updateYRanges(chartDivs);
+    });
 
     function setStatus(msg) {
         statusEl.textContent = msg || "";
@@ -309,16 +276,27 @@
     }
 
     function initCharts() {
+        const channels = [
+            { id: "ch1", color: "#22c55e" },
+            { id: "ch2", color: "#3b82f6" },
+            { id: "ch3", color: "#eab308" },
+            { id: "ch4", color: "#f97316" }
+        ];
+
+        // Reset min/max tracking
+        yMins = [Infinity, Infinity, Infinity, Infinity];
+        yMaxes = [-Infinity, -Infinity, -Infinity, -Infinity];
+
         channels.forEach((ch, idx) => {
             const chartDiv = document.getElementById(`${ch.id}-chart`);
             const isBottom = idx === channels.length - 1;
 
             const data = [{
-                x: [0],  // default baseline point
+                x: [0],  // baseline point
                 y: [0],
                 mode: "lines",
                 line: { color: ch.color, width: 1.5 },
-                name: ch.name
+                name: ch.id.toUpperCase()
             }];
 
             const layout = {
@@ -340,7 +318,9 @@
                     showgrid: true,
                     zeroline: false,
                     gridcolor: "rgba(148, 163, 184, 0.2)",
-                    tickfont: { size: 10 }
+                    tickfont: { size: 10 },
+                    range: [0, 1500],       // default 0–1500
+                    autorange: false
                 }
             };
 
@@ -350,11 +330,59 @@
             });
         });
 
-        // Reset label values
+        // Reset labels
         document.getElementById("ch1-value").textContent = `0.0 ${UNIT}`;
         document.getElementById("ch2-value").textContent = `0.0 ${UNIT}`;
         document.getElementById("ch3-value").textContent = `0.0 ${UNIT}`;
         document.getElementById("ch4-value").textContent = `0.0 ${UNIT}`;
+    }
+
+    function updateYRanges(chartDivs) {
+        // If no data yet, do nothing
+        const anyFinite = yMins.some(v => isFinite(v)) && yMaxes.some(v => isFinite(v));
+        if (!anyFinite) return;
+
+        if (lockYScales) {
+            // Global min/max across all channels
+            let gMin = Infinity;
+            let gMax = -Infinity;
+            for (let i = 0; i < 4; i++) {
+                if (!isFinite(yMins[i]) || !isFinite(yMaxes[i])) continue;
+                if (yMins[i] < gMin) gMin = yMins[i];
+                if (yMaxes[i] > gMax) gMax = yMaxes[i];
+            }
+            if (!isFinite(gMin) || !isFinite(gMax)) return;
+
+            let span = gMax - gMin;
+            if (span <= 0) span = 1;
+            const pad = 0.1 * span;
+            const low = gMin - pad;
+            const high = gMax + pad;
+
+            chartDivs.forEach(div => {
+                Plotly.relayout(div, {
+                    "yaxis.autorange": false,
+                    "yaxis.range": [low, high]
+                });
+            });
+        } else {
+            // Per-channel ranges
+            for (let i = 0; i < 4; i++) {
+                if (!isFinite(yMins[i]) || !isFinite(yMaxes[i])) continue;
+
+                let span = yMaxes[i] - yMins[i];
+                if (span <= 0) span = 1;
+                const pad = 0.1 * span;
+
+                const low = yMins[i] - pad;
+                const high = yMaxes[i] + pad;
+
+                Plotly.relayout(chartDivs[i], {
+                    "yaxis.autorange": false,
+                    "yaxis.range": [low, high]
+                });
+            }
+        }
     }
 
     function animateData(times, ch1, ch2, ch3, ch4) {
@@ -388,17 +416,35 @@
             const y3Slice = ch3.slice(index, end);
             const y4Slice = ch4.slice(index, end);
 
-            // Extend each channel's trace
+            // Extend traces
             Plotly.extendTraces(chartDivs[0], { x: [xSlice], y: [y1Slice] }, [0]);
             Plotly.extendTraces(chartDivs[1], { x: [xSlice], y: [y2Slice] }, [0]);
             Plotly.extendTraces(chartDivs[2], { x: [xSlice], y: [y3Slice] }, [0]);
             Plotly.extendTraces(chartDivs[3], { x: [xSlice], y: [y4Slice] }, [0]);
 
+            // Update min/max per channel for dynamic y-scaling
+            for (const v of y1Slice) {
+                if (v < yMins[0]) yMins[0] = v;
+                if (v > yMaxes[0]) yMaxes[0] = v;
+            }
+            for (const v of y2Slice) {
+                if (v < yMins[1]) yMins[1] = v;
+                if (v > yMaxes[1]) yMaxes[1] = v;
+            }
+            for (const v of y3Slice) {
+                if (v < yMins[2]) yMins[2] = v;
+                if (v > yMaxes[2]) yMaxes[2] = v;
+            }
+            for (const v of y4Slice) {
+                if (v < yMins[3]) yMins[3] = v;
+                if (v > yMaxes[3]) yMaxes[3] = v;
+            }
+
             index = end;
 
+            // X-axis panning
             const lastTime = times[index - 1];
             let startTime, endTime;
-
             if (lastTime < WINDOW_SEC) {
                 startTime = 0;
                 endTime = WINDOW_SEC;
@@ -407,10 +453,12 @@
                 endTime = lastTime;
             }
 
-            // Update x-range on all charts
             chartDivs.forEach(div => {
                 Plotly.relayout(div, { "xaxis.range": [startTime, endTime] });
             });
+
+            // Update y-axis ranges based on current min/max and toggle
+            updateYRanges(chartDivs);
 
             // Update live value labels
             const v1 = ch1[index - 1];
@@ -474,7 +522,7 @@
         }
     });
 
-    // Initial empty charts on page load
+    // Initialize empty charts on page load
     initCharts();
 </script>
 </body>
