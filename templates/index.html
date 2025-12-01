@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>EEG Waveform Visualizer</title>
+    <!-- Plotly CDN -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #020617;
+            color: #f9fafb;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px 16px 48px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            text-align: center;
+            margin-bottom: 24px;
+            opacity: 0.8;
+        }
+
+        .card {
+            background: #020617;
+            border-radius: 16px;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+            border: 1px solid #1f2937;
+            box-shadow: 0 10px 35px rgba(0, 0, 0, 0.6);
+        }
+
+        .form-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: flex-end;
+        }
+
+        .field {
+            flex: 1 1 200px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        select {
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid #374151;
+            background: #020617;
+            color: #f9fafb;
+        }
+
+        button {
+            padding: 10px 16px;
+            border-radius: 999px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.95rem;
+            background: linear-gradient(135deg, #06b6d4, #4f46e5);
+            color: #f9fafb;
+            box-shadow: 0 10px 30px rgba(37, 99, 235, 0.6);
+            white-space: nowrap;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: default;
+            box-shadow: none;
+        }
+
+        #status {
+            margin-top: 8px;
+            font-size: 0.9rem;
+            min-height: 1.2em;
+        }
+
+        .visualizer-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .channel-row {
+            display: flex;
+            align-items: stretch;
+            gap: 12px;
+        }
+
+        .channel-label {
+            width: 150px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: flex-end;
+            padding-right: 8px;
+            font-size: 0.88rem;
+        }
+
+        .channel-label-name {
+            font-weight: 600;
+        }
+
+        .channel-label-value {
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+
+        .channel-chart {
+            flex: 1;
+            height: 170px; /* per-channel chart height */
+        }
+
+        .legend-row {
+            margin-top: 8px;
+        }
+
+        .legend-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            margin-right: 10px;
+            opacity: 0.8;
+        }
+
+        .legend-color {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        @media (max-width: 720px) {
+            .channel-row {
+                flex-direction: column;
+            }
+
+            .channel-label {
+                width: 100%;
+                align-items: flex-start;
+                padding-right: 0;
+                padding-bottom: 4px;
+            }
+
+            .channel-chart {
+                height: 160px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>EEG Waveform Visualizer</h1>
+    <p class="subtitle">
+        Select a sample EEG file and song, then click <strong>Visualize</strong> to see the 4-channel brainwave trace.
+    </p>
+
+    <!-- Controls card -->
+    <div class="card">
+        <form id="control-form">
+            <div class="form-row">
+                <div class="field">
+                    <label for="csv-select">EEG CSV file</label>
+                    <select id="csv-select" name="csv_file">
+                        {% for label, filename in csv_files.items() %}
+                        <option value="{{ label }}">{{ label }} ({{ filename }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label for="song-select">Sample song</label>
+                    <select id="song-select" name="song_file">
+                        {% for label, filename in song_files.items() %}
+                        <option value="{{ label }}">{{ label }} ({{ filename }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <button type="submit" id="visualize-btn">Visualize</button>
+                </div>
+            </div>
+            <div id="status"></div>
+        </form>
+    </div>
+
+    <!-- Chart card -->
+    <div class="card">
+        <h3 style="text-align:center; margin-top:4px; margin-bottom:12px;">
+            EEG Raw Channels (Dynamic Playback)
+        </h3>
+
+        <div class="visualizer-wrapper">
+            <!-- CH1 row -->
+            <div class="channel-row">
+                <div class="channel-label">
+                    <div class="channel-label-name">CH1 – Left Temporal</div>
+                    <div class="channel-label-value" id="ch1-value">0.0 µV</div>
+                </div>
+                <div class="channel-chart" id="ch1-chart"></div>
+            </div>
+
+            <!-- CH2 row -->
+            <div class="channel-row">
+                <div class="channel-label">
+                    <div class="channel-label-name">CH2 – Left Frontal</div>
+                    <div class="channel-label-value" id="ch2-value">0.0 µV</div>
+                </div>
+                <div class="channel-chart" id="ch2-chart"></div>
+            </div>
+
+            <!-- CH3 row -->
+            <div class="channel-row">
+                <div class="channel-label">
+                    <div class="channel-label-name">CH3 – Right Frontal</div>
+                    <div class="channel-label-value" id="ch3-value">0.0 µV</div>
+                </div>
+                <div class="channel-chart" id="ch3-chart"></div>
+            </div>
+
+            <!-- CH4 row -->
+            <div class="channel-row">
+                <div class="channel-label">
+                    <div class="channel-label-name">CH4 – Right Temporal</div>
+                    <div class="channel-label-value" id="ch4-value">0.0 µV</div>
+                </div>
+                <div class="channel-chart" id="ch4-chart"></div>
+            </div>
+        </div>
+
+        <div class="legend-row">
+            <span class="legend-label">
+                <span class="legend-color" style="background:#22c55e;"></span>CH1 – Left Temporal
+            </span>
+            <span class="legend-label">
+                <span class="legend-color" style="background:#3b82f6;"></span>CH2 – Left Frontal
+            </span>
+            <span class="legend-label">
+                <span class="legend-color" style="background:#eab308;"></span>CH3 – Right Frontal
+            </span>
+            <span class="legend-label">
+                <span class="legend-color" style="background:#f97316;"></span>CH4 – Right Temporal
+            </span>
+        </div>
+    </div>
+</div>
+
+<script>
+    const form = document.getElementById("control-form");
+    const visualizeBtn = document.getElementById("visualize-btn");
+    const statusEl = document.getElementById("status");
+
+    const WINDOW_SEC = 20;   // width of visible time window
+    const UNIT = "µV";
+
+    let animationTimer = null;
+
+    const channels = [
+        { id: "ch1", name: "CH1", color: "#22c55e" },
+        { id: "ch2", name: "CH2", color: "#3b82f6" },
+        { id: "ch3", name: "CH3", color: "#eab308" },
+        { id: "ch4", name: "CH4", color: "#f97316" }
+    ];
+
+    function setStatus(msg) {
+        statusEl.textContent = msg || "";
+    }
+
+    function clearAnimation() {
+        if (animationTimer !== null) {
+            clearInterval(animationTimer);
+            animationTimer = null;
+        }
+    }
+
+    async function fetchData(csvLabel, songLabel) {
+        const payload = { csv_file: csvLabel, song_file: songLabel };
+
+        const res = await fetch("/visualize", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to load visualization data.");
+        }
+
+        return res.json();
+    }
+
+    function initCharts() {
+        channels.forEach((ch, idx) => {
+            const chartDiv = document.getElementById(`${ch.id}-chart`);
+            const isBottom = idx === channels.length - 1;
+
+            const data = [{
+                x: [0],  // default baseline point
+                y: [0],
+                mode: "lines",
+                line: { color: ch.color, width: 1.5 },
+                name: ch.name
+            }];
+
+            const layout = {
+                margin: { l: 40, r: 10, t: 4, b: isBottom ? 40 : 12 },
+                paper_bgcolor: "#020617",
+                plot_bgcolor: "#020617",
+                font: { color: "#f9fafb", size: 11 },
+                showlegend: false,
+                xaxis: {
+                    title: isBottom ? "Time (s)" : "",
+                    showgrid: false,
+                    zeroline: false,
+                    gridcolor: "rgba(148, 163, 184, 0.2)",
+                    showticklabels: isBottom,
+                    range: [0, WINDOW_SEC]
+                },
+                yaxis: {
+                    title: isBottom ? `Amplitude (${UNIT})` : "",
+                    showgrid: true,
+                    zeroline: false,
+                    gridcolor: "rgba(148, 163, 184, 0.2)",
+                    tickfont: { size: 10 }
+                }
+            };
+
+            Plotly.newPlot(chartDiv, data, layout, {
+                responsive: true,
+                displayModeBar: false
+            });
+        });
+
+        // Reset label values
+        document.getElementById("ch1-value").textContent = `0.0 ${UNIT}`;
+        document.getElementById("ch2-value").textContent = `0.0 ${UNIT}`;
+        document.getElementById("ch3-value").textContent = `0.0 ${UNIT}`;
+        document.getElementById("ch4-value").textContent = `0.0 ${UNIT}`;
+    }
+
+    function animateData(times, ch1, ch2, ch3, ch4) {
+        clearAnimation();
+
+        const totalPoints = times.length;
+        if (totalPoints === 0) {
+            setStatus("No /muse/eeg data found in this CSV.");
+            return;
+        }
+
+        let index = 0;
+        const stepSize = 3;
+        const intervalMs = 40;
+
+        const chartDivs = [
+            document.getElementById("ch1-chart"),
+            document.getElementById("ch2-chart"),
+            document.getElementById("ch3-chart"),
+            document.getElementById("ch4-chart")
+        ];
+
+        setStatus(`Animating ${totalPoints} samples...`);
+
+        animationTimer = setInterval(() => {
+            const end = Math.min(index + stepSize, totalPoints);
+
+            const xSlice = times.slice(index, end);
+            const y1Slice = ch1.slice(index, end);
+            const y2Slice = ch2.slice(index, end);
+            const y3Slice = ch3.slice(index, end);
+            const y4Slice = ch4.slice(index, end);
+
+            // Extend each channel's trace
+            Plotly.extendTraces(chartDivs[0], { x: [xSlice], y: [y1Slice] }, [0]);
+            Plotly.extendTraces(chartDivs[1], { x: [xSlice], y: [y2Slice] }, [0]);
+            Plotly.extendTraces(chartDivs[2], { x: [xSlice], y: [y3Slice] }, [0]);
+            Plotly.extendTraces(chartDivs[3], { x: [xSlice], y: [y4Slice] }, [0]);
+
+            index = end;
+
+            const lastTime = times[index - 1];
+            let startTime, endTime;
+
+            if (lastTime < WINDOW_SEC) {
+                startTime = 0;
+                endTime = WINDOW_SEC;
+            } else {
+                startTime = lastTime - WINDOW_SEC;
+                endTime = lastTime;
+            }
+
+            // Update x-range on all charts
+            chartDivs.forEach(div => {
+                Plotly.relayout(div, { "xaxis.range": [startTime, endTime] });
+            });
+
+            // Update live value labels
+            const v1 = ch1[index - 1];
+            const v2 = ch2[index - 1];
+            const v3 = ch3[index - 1];
+            const v4 = ch4[index - 1];
+
+            document.getElementById("ch1-value").textContent = `${v1.toFixed(1)} ${UNIT}`;
+            document.getElementById("ch2-value").textContent = `${v2.toFixed(1)} ${UNIT}`;
+            document.getElementById("ch3-value").textContent = `${v3.toFixed(1)} ${UNIT}`;
+            document.getElementById("ch4-value").textContent = `${v4.toFixed(1)} ${UNIT}`;
+
+            if (index >= totalPoints) {
+                clearAnimation();
+                setStatus(`Finished animating ${totalPoints} samples.`);
+            }
+        }, intervalMs);
+    }
+
+    form.addEventListener("submit", async (evt) => {
+        evt.preventDefault();
+        clearAnimation();
+
+        const csvSelect = document.getElementById("csv-select");
+        const songSelect = document.getElementById("song-select");
+
+        const csvLabel = csvSelect.value;
+        const songLabel = songSelect.value;
+
+        visualizeBtn.disabled = true;
+        setStatus("Loading data...");
+
+        try {
+            const data = await fetchData(csvLabel, songLabel);
+
+            if (data.error && (!data.times || data.times.length === 0)) {
+                setStatus(`Error: ${data.error}`);
+                visualizeBtn.disabled = false;
+                return;
+            }
+
+            const times = data.times || [];
+            const ch1 = data.ch1 || [];
+            const ch2 = data.ch2 || [];
+            const ch3 = data.ch3 || [];
+            const ch4 = data.ch4 || [];
+
+            if (data.song_duration) {
+                setStatus(`Song duration: ${data.song_duration.toFixed(2)} s – animating EEG...`);
+            } else {
+                setStatus("Song duration unknown – animating with sample index.");
+            }
+
+            initCharts();
+            animateData(times, ch1, ch2, ch3, ch4);
+        } catch (err) {
+            console.error(err);
+            setStatus(`Error: ${err.message}`);
+        } finally {
+            visualizeBtn.disabled = false;
+        }
+    });
+
+    // Initial empty charts on page load
+    initCharts();
+</script>
+</body>
+</html>
