@@ -10,32 +10,39 @@ import ast
 import sounddevice as sd
 import numpy as np
 import sys
-from collections import defaultdict
+from collections import deque
 from PyQt6.QtWidgets import (QApplication, QVBoxLayout, QWidget, QScrollArea, QHBoxLayout, QComboBox,
                              QLabel, QPushButton, QDoubleSpinBox, QFileDialog, QGridLayout)
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, QObject, pyqtSignal
 import pyqtgraph as pg
 
+# Global data store for thread-safe communication
+class DataStore(QObject):
+    data_updated = pyqtSignal(str, float, float, float, float, float, float, float, float)
+    
+    def __init__(self):
+        super().__init__()
+        self.latest_data = None
+
 class BrainwavePlotter:
-    def __init__(self, muse_manager, ip="127.0.0.1", port=7001):
-        self.muse_manager = muse_manager
-        self.ip = ip
-        self.port = port
+    def __init__(self, data_store):
+        self.data_store = data_store
+        self.data_store.data_updated.connect(self.on_data_updated)
         
         # Data storage for plotting
-        self.timestamps = []
+        self.timestamps = deque(maxlen=1000)
         self.brainwave_data = {
-            'delta': [],
-            'theta': [], 
-            'alpha': [],
-            'beta': [],
-            'gamma': []
+            'delta': deque(maxlen=1000),
+            'theta': deque(maxlen=1000), 
+            'alpha': deque(maxlen=1000),
+            'beta': deque(maxlen=1000),
+            'gamma': deque(maxlen=1000)
         }
-        self.mental_states = []
+        self.mental_states = deque(maxlen=1000)
         self.scores = {
-            'attention': [],
-            'relaxation': [],
-            'creativity': []
+            'attention': deque(maxlen=1000),
+            'relaxation': deque(maxlen=1000),
+            'creativity': deque(maxlen=1000)
         }
         
         # PyQt setup
@@ -91,6 +98,27 @@ class BrainwavePlotter:
         self.main_widget.resize(1200, 800)
         self.main_widget.setWindowTitle("Brainwave & Mental State Monitor")
 
+    def on_data_updated(self, mental_state, attention, relaxation, creativity, delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm):
+        """Handle new data from the Muse manager"""
+        current_time = time.time()
+        
+        # Store data
+        self.timestamps.append(current_time)
+        self.mental_states.append(mental_state)
+        
+        self.brainwave_data['delta'].append(delta_norm)
+        self.brainwave_data['theta'].append(theta_norm)
+        self.brainwave_data['alpha'].append(alpha_norm)
+        self.brainwave_data['beta'].append(beta_norm)
+        self.brainwave_data['gamma'].append(gamma_norm)
+        
+        self.scores['attention'].append(attention)
+        self.scores['relaxation'].append(relaxation)
+        self.scores['creativity'].append(creativity)
+        
+        # Debug: Print received data
+        # print(f"Plotter received: {mental_state} at {current_time}")
+
     def create_plots(self):
         """Create all the plots for brainwaves and mental states"""
         
@@ -100,6 +128,7 @@ class BrainwavePlotter:
         self.brainwave_plot.setLabel('bottom', 'Time (seconds)')
         self.brainwave_plot.addLegend()
         self.brainwave_plot.showGrid(x=True, y=True)
+        self.brainwave_plot.setYRange(0, 1)
         
         self.brainwave_curves = {
             'delta': self.brainwave_plot.plot(pen=pg.mkPen('red', width=2), name='Delta'),
@@ -149,38 +178,16 @@ class BrainwavePlotter:
         y_ticks = [(v, k.upper()) for k, v in self.state_mapping.items()]
         self.state_plot.getPlotItem().getAxis('left').setTicks([y_ticks])
         
+        # Add colored regions for each state
+        self.state_regions = []
+        colors = ['gray', 'red', 'blue', 'green', 'orange']
+        for i, (state, value) in enumerate(self.state_mapping.items()):
+            region = pg.LinearRegionItem(values=[value-0.45, value+0.45], orientation='horizontal', 
+                                       brush=pg.mkBrush(color=colors[i], alpha=50), movable=False)
+            self.state_plot.addItem(region)
+            self.state_regions.append(region)
+        
         self.scroll_layout.addWidget(self.state_plot)
-
-    def update_data(self, mental_state, attention, relaxation, creativity, 
-                   delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm):
-        """Update data for plotting"""
-        current_time = time.time()
-        
-        # Store data
-        self.timestamps.append(current_time)
-        self.mental_states.append(mental_state)
-        
-        self.brainwave_data['delta'].append(delta_norm)
-        self.brainwave_data['theta'].append(theta_norm)
-        self.brainwave_data['alpha'].append(alpha_norm)
-        self.brainwave_data['beta'].append(beta_norm)
-        self.brainwave_data['gamma'].append(gamma_norm)
-        
-        self.scores['attention'].append(attention)
-        self.scores['relaxation'].append(relaxation)
-        self.scores['creativity'].append(creativity)
-        
-        # Keep only recent data based on time range
-        time_range = self.time_range_spin.value()
-        cutoff_time = current_time - time_range
-        
-        while self.timestamps and self.timestamps[0] < cutoff_time:
-            self.timestamps.pop(0)
-            self.mental_states.pop(0)
-            for wave in self.brainwave_data:
-                self.brainwave_data[wave].pop(0)
-            for score in self.scores:
-                self.scores[score].pop(0)
 
     def update_plots(self):
         """Update all plots with current data"""
@@ -190,28 +197,74 @@ class BrainwavePlotter:
         # Convert timestamps to relative seconds for x-axis
         current_time = time.time()
         time_range = self.time_range_spin.value()
-        x_data = [t - (current_time - time_range) for t in self.timestamps]
         
+        # Ensure we have data to plot
+        if len(self.timestamps) == 0:
+            return
+            
+        # Calculate time window
+        start_time = current_time - time_range
+        x_data = []
+        valid_indices = []
+        
+        # Filter data within time window
+        for i, t in enumerate(self.timestamps):
+            if t >= start_time:
+                x_data.append(t - start_time)
+                valid_indices.append(i)
+        
+        if not x_data:
+            return
+            
         # Update brainwave plot
         for wave, curve in self.brainwave_curves.items():
-            if self.brainwave_data[wave]:
-                curve.setData(x_data, self.brainwave_data[wave])
+            if self.brainwave_data[wave] and len(self.brainwave_data[wave]) > valid_indices[0]:
+                # Get only the data within our time window
+                wave_data = [self.brainwave_data[wave][i] for i in valid_indices if i < len(self.brainwave_data[wave])]
+                if len(wave_data) == len(x_data):
+                    curve.setData(x_data, wave_data)
         
         # Update scores plot
         for score_type, curve in self.score_curves.items():
-            if self.scores[score_type]:
-                curve.setData(x_data, self.scores[score_type])
+            if self.scores[score_type] and len(self.scores[score_type]) > valid_indices[0]:
+                # Get only the data within our time window
+                score_data = [self.scores[score_type][i] for i in valid_indices if i < len(self.scores[score_type])]
+                if len(score_data) == len(x_data):
+                    curve.setData(x_data, score_data)
         
         # Update state plot
-        if self.mental_states:
-            state_numeric = [self.state_mapping.get(state, 0) for state in self.mental_states]
-            self.state_curve.setData(x_data, state_numeric)
+        if self.mental_states and len(self.mental_states) > valid_indices[0]:
+            # Get only the states within our time window
+            state_data = [self.mental_states[i] for i in valid_indices if i < len(self.mental_states)]
+            state_numeric = [self.state_mapping.get(state, 0) for state in state_data]
+            
+            if len(state_numeric) == len(x_data):
+                # Use scatter plot for better visibility of state changes
+                scatter = pg.ScatterPlotItem(x=x_data, y=state_numeric, 
+                                           pen=pg.mkPen('black', width=2),
+                                           brush=pg.mkBrush('black'),
+                                           size=10)
+                
+                # Clear old plot and add new scatter
+                self.state_plot.clear()
+                
+                # Re-add regions
+                for region in self.state_regions:
+                    self.state_plot.addItem(region)
+                
+                # Add scatter plot
+                self.state_plot.addItem(scatter)
+                
+                # Update y-axis labels
+                y_ticks = [(v, k.upper()) for k, v in self.state_mapping.items()]
+                self.state_plot.getPlotItem().getAxis('left').setTicks([y_ticks])
+                self.state_plot.setYRange(-0.5, 4.5)
         
         # Update status and current state
         if self.mental_states:
             current_state = self.mental_states[-1]
             state_colors = {
-                'neutral': 'black',
+                'neutral': 'gray',
                 'focused': 'red', 
                 'relaxed': 'blue',
                 'creative': 'green',
@@ -243,19 +296,31 @@ class BrainwavePlotter:
                 writer.writerow(['timestamp', 'mental_state', 'attention', 'relaxation', 'creativity',
                                'delta', 'theta', 'alpha', 'beta', 'gamma'])
                 
+                # Convert deques to lists for indexing
+                timestamps_list = list(self.timestamps)
+                mental_states_list = list(self.mental_states)
+                scores_attention = list(self.scores['attention'])
+                scores_relaxation = list(self.scores['relaxation'])
+                scores_creativity = list(self.scores['creativity'])
+                brainwave_delta = list(self.brainwave_data['delta'])
+                brainwave_theta = list(self.brainwave_data['theta'])
+                brainwave_alpha = list(self.brainwave_data['alpha'])
+                brainwave_beta = list(self.brainwave_data['beta'])
+                brainwave_gamma = list(self.brainwave_data['gamma'])
+                
                 # Write data
-                for i, timestamp in enumerate(self.timestamps):
+                for i in range(len(timestamps_list)):
                     writer.writerow([
-                        timestamp,
-                        self.mental_states[i],
-                        self.scores['attention'][i],
-                        self.scores['relaxation'][i],
-                        self.scores['creativity'][i],
-                        self.brainwave_data['delta'][i],
-                        self.brainwave_data['theta'][i],
-                        self.brainwave_data['alpha'][i],
-                        self.brainwave_data['beta'][i],
-                        self.brainwave_data['gamma'][i]
+                        timestamps_list[i],
+                        mental_states_list[i] if i < len(mental_states_list) else '',
+                        scores_attention[i] if i < len(scores_attention) else '',
+                        scores_relaxation[i] if i < len(scores_relaxation) else '',
+                        scores_creativity[i] if i < len(scores_creativity) else '',
+                        brainwave_delta[i] if i < len(brainwave_delta) else '',
+                        brainwave_theta[i] if i < len(brainwave_theta) else '',
+                        brainwave_alpha[i] if i < len(brainwave_alpha) else '',
+                        brainwave_beta[i] if i < len(brainwave_beta) else '',
+                        brainwave_gamma[i] if i < len(brainwave_gamma) else ''
                     ])
             print(f"✅ Data saved to {save_path}")
 
@@ -264,16 +329,34 @@ class BrainwavePlotter:
         return self.app.exec()
 
 class MuseStreamManager:
-    # ... (previous MuseStreamManager code remains the same until the calculate_mental_states method)
+    # --- Configuration ---
+    EEG_BANDS = [
+        "/muse/elements/delta_absolute", "/muse/elements/theta_absolute",
+        "/muse/elements/alpha_absolute", "/muse/elements/beta_absolute", 
+        "/muse/elements/gamma_absolute", "/muse/elements/delta_relative",
+        "/muse/elements/theta_relative", "/muse/elements/alpha_relative",
+        "/muse/elements/beta_relative", "/muse/elements/gamma_relative"
+    ]
+    FIXED_PLAYBACK_DELAY = 0.5 
     
-    def __init__(self, ip="0.0.0.0", port=3001, csv_path="muse_stream.csv", timeout=3.0, enable_plotting=True):
+    # Brainwave addresses for comprehensive analysis
+    DELTA_ABS = "/muse/elements/delta_absolute"
+    THETA_ABS = "/muse/elements/theta_absolute" 
+    ALPHA_ABS = "/muse/elements/alpha_absolute"
+    BETA_ABS = "/muse/elements/beta_absolute"
+    GAMMA_ABS = "/muse/elements/gamma_absolute"
+    ALPHA_REL = "/muse/elements/alpha_relative"
+    BETA_REL = "/muse/elements/beta_relative"
+    # ---------------------
+
+    def __init__(self, ip="0.0.0.0", port=3001, csv_path="muse_stream.csv", timeout=3.0, data_store=None):
         self.ip = ip 
         self.port = port
         self.csv_path = csv_path
         self.timeout = timeout
         self.data_received_event = threading.Event()
         self.mode = "detecting"
-        self.enable_plotting = enable_plotting
+        self.data_store = data_store
         
         # Store all brainwave data
         self.latest_delta = None
@@ -281,20 +364,6 @@ class MuseStreamManager:
         self.latest_alpha = None
         self.latest_beta = None
         self.latest_gamma = None
-        
-        # More conservative wave-specific normalization baselines
-        self.wave_baselines = {
-            'delta': 100.0,   # Delta waves are typically highest amplitude
-            'theta': 50.0,    # Theta is medium-high
-            'alpha': 25.0,    # Alpha is medium
-            'beta': 15.0,     # Beta is lower
-            'gamma': 8.0      # Gamma is typically lowest
-        }
-        
-        # Dynamic calibration (will adjust based on actual data)
-        self.dynamic_baselines = self.wave_baselines.copy()
-        self.calibration_samples = []
-        self.is_calibrated = False
         
         self.audio_thread = None
         self.stop_audio = threading.Event()
@@ -309,10 +378,6 @@ class MuseStreamManager:
         self.relaxation_score = 0.5
         self.creativity_score = 0.5
         self.effects_lock = threading.Lock()
-        
-        # For plotting
-        self.plotter = None
-        self.plotter_thread = None
         
         # Initialize effects with default parameters
         self.setup_audio_effects()
@@ -342,69 +407,8 @@ class MuseStreamManager:
         """Ensure value stays within specified range"""
         return max(min_val, min(value, max_val))
 
-    def wave_specific_normalization(self, delta_avg, theta_avg, alpha_avg, beta_avg, gamma_avg):
-        """Apply wave-specific normalization with more conservative scaling"""
-        
-        # Use sigmoid-like function for more gradual normalization
-        def sigmoid_normalize(value, baseline):
-            # Sigmoid function that maps to 0-1 range more gradually
-            x = value / baseline
-            return 1 / (1 + np.exp(-(x - 0.5) * 4))  # More gradual slope
-        
-        # Apply sigmoid normalization to each wave
-        delta_norm = sigmoid_normalize(delta_avg, self.dynamic_baselines['delta'])
-        theta_norm = sigmoid_normalize(theta_avg, self.dynamic_baselines['theta'])
-        alpha_norm = sigmoid_normalize(alpha_avg, self.dynamic_baselines['alpha'])
-        beta_norm = sigmoid_normalize(beta_avg, self.dynamic_baselines['beta'])
-        gamma_norm = sigmoid_normalize(gamma_avg, self.dynamic_baselines['gamma'])
-        
-        # Apply additional scaling to prevent maxing out
-        scale_factor = 0.7  # Keep values in more reasonable range
-        delta_norm *= scale_factor
-        theta_norm *= scale_factor
-        alpha_norm *= scale_factor
-        beta_norm *= scale_factor
-        gamma_norm *= scale_factor
-        
-        return (
-            self.clamp(delta_norm, 0.0, 1.0),
-            self.clamp(theta_norm, 0.0, 1.0),
-            self.clamp(alpha_norm, 0.0, 1.0),
-            self.clamp(beta_norm, 0.0, 1.0),
-            self.clamp(gamma_norm, 0.0, 1.0)
-        )
-
-    def update_dynamic_baselines(self, delta_avg, theta_avg, alpha_avg, beta_avg, gamma_avg):
-        """Update baselines based on recent data for adaptive normalization"""
-        if len(self.calibration_samples) < 30:  # Reduced to 30 samples for faster calibration
-            self.calibration_samples.append((delta_avg, theta_avg, alpha_avg, beta_avg, gamma_avg))
-            return False
-        
-        if not self.is_calibrated:
-            # Calculate moving averages for each wave
-            deltas = [s[0] for s in self.calibration_samples]
-            thetas = [s[1] for s in self.calibration_samples]
-            alphas = [s[2] for s in self.calibration_samples]
-            betas = [s[3] for s in self.calibration_samples]
-            gammas = [s[4] for s in self.calibration_samples]
-            
-            # Update baselines with exponential moving average
-            alpha = 0.05  # More conservative smoothing
-            self.dynamic_baselines['delta'] = (1 - alpha) * self.dynamic_baselines['delta'] + alpha * np.percentile(deltas, 75)  # Use 75th percentile
-            self.dynamic_baselines['theta'] = (1 - alpha) * self.dynamic_baselines['theta'] + alpha * np.percentile(thetas, 75)
-            self.dynamic_baselines['alpha'] = (1 - alpha) * self.dynamic_baselines['alpha'] + alpha * np.percentile(alphas, 75)
-            self.dynamic_baselines['beta'] = (1 - alpha) * self.dynamic_baselines['beta'] + alpha * np.percentile(betas, 75)
-            self.dynamic_baselines['gamma'] = (1 - alpha) * self.dynamic_baselines['gamma'] + alpha * np.percentile(gammas, 75)
-            
-            self.is_calibrated = True
-            print(f"🎯 Dynamic calibration complete! Baselines: Delta={self.dynamic_baselines['delta']:.1f}, "
-                  f"Theta={self.dynamic_baselines['theta']:.1f}, Alpha={self.dynamic_baselines['alpha']:.1f}, "
-                  f"Beta={self.dynamic_baselines['beta']:.1f}, Gamma={self.dynamic_baselines['gamma']:.1f}")
-        
-        return True
-
     def calculate_mental_states(self):
-        """Calculate comprehensive mental states with improved normalization"""
+        """Calculate comprehensive mental states based on all brainwaves"""
         if None in [self.latest_delta, self.latest_theta, self.latest_alpha, 
                    self.latest_beta, self.latest_gamma]:
             return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
@@ -417,39 +421,39 @@ class MuseStreamManager:
             beta_avg = np.mean([x for x in self.latest_beta if isinstance(x, (int, float))])
             gamma_avg = np.mean([x for x in self.latest_gamma if isinstance(x, (int, float))])
             
-            # Update dynamic baselines
-            self.update_dynamic_baselines(delta_avg, theta_avg, alpha_avg, beta_avg, gamma_avg)
+            # Total power for normalization
+            total_power = delta_avg + theta_avg + alpha_avg + beta_avg + gamma_avg
             
-            # Apply wave-specific normalization
-            delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm = self.wave_specific_normalization(
-                delta_avg, theta_avg, alpha_avg, beta_avg, gamma_avg
-            )
+            if total_power == 0:
+                return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
             
-            # Calculate relative percentages from NORMALIZED values
-            total_normalized = delta_norm + theta_norm + alpha_norm + beta_norm + gamma_norm
+            # Calculate relative percentages
+            delta_rel = delta_avg / total_power
+            theta_rel = theta_avg / total_power
+            alpha_rel = alpha_avg / total_power
+            beta_rel = beta_avg / total_power
+            gamma_rel = gamma_avg / total_power
             
-            if total_normalized == 0:
-                return "neutral", 0.5, 0.5, 0.5, delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm
+            # Keep original normalization for plotting (scaled for visualization)
+            delta_norm = self.clamp(delta_avg / 100.0, 0.0, 1.0)  # Scale for plotting
+            theta_norm = self.clamp(theta_avg / 50.0, 0.0, 1.0)
+            alpha_norm = self.clamp(alpha_avg / 30.0, 0.0, 1.0)
+            beta_norm = self.clamp(beta_avg / 20.0, 0.0, 1.0)
+            gamma_norm = self.clamp(gamma_avg / 15.0, 0.0, 1.0)
             
-            delta_rel = delta_norm / total_normalized
-            theta_rel = theta_norm / total_normalized
-            alpha_rel = alpha_norm / total_normalized
-            beta_rel = beta_norm / total_normalized
-            gamma_rel = gamma_norm / total_normalized
+            # Mental state calculations based on brainwave research:
             
-            # MORE CONSERVATIVE Mental state calculations:
+            # 1. ATTENTION SCORE: Beta/Gamma dominance = focused attention
+            attention_score = self.clamp((beta_rel * 0.6 + gamma_rel * 0.4) * 2, 0.0, 1.0)
             
-            # 1. ATTENTION SCORE: Use Beta dominance with saturation control
-            attention_score = self.clamp(beta_rel * 1.5, 0.0, 0.9)  # Cap at 0.9 to prevent maxing out
+            # 2. RELAXATION SCORE: Alpha dominance = relaxed, calm
+            relaxation_score = self.clamp(alpha_rel * 1.5, 0.0, 1.0)
             
-            # 2. RELAXATION SCORE: Alpha dominance with saturation control
-            relaxation_score = self.clamp(alpha_rel * 1.3, 0.0, 0.9)
+            # 3. CREATIVITY SCORE: Theta/Alpha balance = creative, meditative
+            creativity_score = self.clamp((theta_rel * 0.5 + alpha_rel * 0.5) * 1.5, 0.0, 1.0)
             
-            # 3. CREATIVITY SCORE: Theta + Alpha combination
-            creativity_score = self.clamp((theta_rel * 0.5 + alpha_rel * 0.5) * 1.2, 0.0, 0.9)
-            
-            # 4. DROWSINESS: Only when Theta/Delta are dominant
-            drowsiness_score = self.clamp((theta_rel * 0.7 + delta_rel * 0.3) * 1.1, 0.0, 0.9)
+            # 4. DROWSINESS: Theta/Delta dominance = sleepy, drowsy
+            drowsiness_score = self.clamp((theta_rel * 0.6 + delta_rel * 0.4) * 2, 0.0, 1.0)
             
             # Determine primary mental state
             scores = {
@@ -461,23 +465,10 @@ class MuseStreamManager:
             
             primary_state = max(scores, key=scores.get)
             
-            # More conservative thresholds
-            classification_thresholds = {
-                "focused": 0.3,    # Higher threshold for focused
-                "relaxed": 0.28,   # Higher threshold for relaxed  
-                "creative": 0.25,  # Higher threshold for creative
-                "drowsy": 0.35     # Much higher threshold for drowsy
-            }
-            
-            # Only classify if score meets threshold AND is clearly dominant
-            if scores[primary_state] < classification_thresholds[primary_state]:
+            # Only classify if score is significant
+            if scores[primary_state] < 0.3:
                 primary_state = "neutral"
-            else:
-                # Check if this state is clearly dominant (15% higher than next)
-                sorted_scores = sorted(scores.values(), reverse=True)
-                if len(sorted_scores) > 1 and (sorted_scores[0] - sorted_scores[1]) < 0.12:
-                    primary_state = "neutral"  # Too close to call
-                    
+            
             return (primary_state, attention_score, relaxation_score, creativity_score,
                    delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
             
@@ -486,69 +477,65 @@ class MuseStreamManager:
             return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
 
     def update_audio_effects_based_on_mental_state(self, mental_state, attention, relaxation, creativity):
-        """Update audio effects with more gradual scaling"""
+        """Update audio effects based on comprehensive mental state analysis"""
         with self.effects_lock:
             if mental_state == "focused":
                 # HIGH FOCUS: Clear, analytical, precise
-                focus_strength = self.clamp(attention * 1.5, 0.0, 1.0)  # Reduced multiplier
-                print(f"🎯 FOCUSED STATE (strength: {focus_strength:.2f}): Clear, punchy audio")
-                self.board[0].threshold_db = -20 + (focus_strength * -3)  # Reduced effect
-                self.board[0].ratio = 4 + (focus_strength * 1.5)
-                self.board[1].gain_db = 1.0 + (focus_strength * 4.0)  # Reduced bass boost
-                self.board[2].gain_db = 0.5 + (focus_strength * 1.5)
-                self.board[3].mix = self.clamp(0.2 - (focus_strength * 0.15), 0.0, 1.0)
-                self.board[4].mix = self.clamp(0.1 - (focus_strength * 0.06), 0.0, 1.0)
-                self.board[5].mix = self.clamp(0.15 - (focus_strength * 0.12), 0.0, 1.0)
-                self.board[6].wet_level = self.clamp(0.2 - (focus_strength * 0.15), 0.0, 1.0)
-                self.board[6].room_size = self.clamp(0.4 - (focus_strength * 0.15), 0.0, 1.0)
-                self.board[7].gain_db = focus_strength * 1.5
+                print("🎯 FOCUSED STATE: Clear, punchy audio")
+                self.board[0].threshold_db = -15  # More compression
+                self.board[0].ratio = 6
+                self.board[1].gain_db = 6.0  # Strong bass boost
+                self.board[2].gain_db = 3.0  # Treble boost for clarity
+                self.board[3].mix = self.clamp(0.05, 0.0, 1.0)  # Minimal chorus
+                self.board[4].mix = self.clamp(0.02, 0.0, 1.0)  # Minimal phaser
+                self.board[5].mix = self.clamp(0.05, 0.0, 1.0)  # Minimal delay
+                self.board[6].wet_level = self.clamp(0.05, 0.0, 1.0)  # Minimal reverb
+                self.board[6].room_size = self.clamp(0.2, 0.0, 1.0)
+                self.board[7].gain_db = 2.0  # Slight volume boost
                 
             elif mental_state == "relaxed":
                 # RELAXED: Smooth, warm, comfortable
-                relax_strength = self.clamp(relaxation * 1.2, 0.0, 1.0)  # Reduced multiplier
-                print(f"😌 RELAXED STATE (strength: {relax_strength:.2f}): Warm, smooth audio")
-                self.board[0].threshold_db = -22
+                print("😌 RELAXED STATE: Warm, smooth audio")
+                self.board[0].threshold_db = -22  # Less compression
                 self.board[0].ratio = 3
-                self.board[1].gain_db = 0.5 + (relax_strength * 0.8)
-                self.board[2].gain_db = -0.3 + (relax_strength * 0.3)
-                self.board[3].mix = self.clamp(0.15 + (relax_strength * 0.08), 0.0, 1.0)
-                self.board[4].mix = self.clamp(0.08 + (relax_strength * 0.05), 0.0, 1.0)
-                self.board[5].mix = self.clamp(0.1 + (relax_strength * 0.08), 0.0, 1.0)
-                self.board[6].wet_level = self.clamp(0.15 + (relax_strength * 0.15), 0.0, 1.0)
-                self.board[6].room_size = self.clamp(0.4 + (relax_strength * 0.2), 0.0, 1.0)
-                self.board[7].gain_db = -0.5 + (relax_strength * 0.5)
+                self.board[1].gain_db = 2.0  # Moderate bass
+                self.board[2].gain_db = 0.0  # Neutral treble
+                self.board[3].mix = self.clamp(0.2, 0.0, 1.0)  # Gentle chorus
+                self.board[4].mix = self.clamp(0.1, 0.0, 1.0)  # Light phaser
+                self.board[5].mix = self.clamp(0.15, 0.0, 1.0)  # Some delay
+                self.board[6].wet_level = self.clamp(0.25, 0.0, 1.0)  # Moderate reverb
+                self.board[6].room_size = self.clamp(0.5, 0.0, 1.0)
+                self.board[7].gain_db = 0.0  # Normal volume
                 
             elif mental_state == "creative":
                 # CREATIVE: Expansive, imaginative, flowing
-                creative_strength = self.clamp(creativity * 1.1, 0.0, 1.0)  # Reduced multiplier
-                print(f"🎨 CREATIVE STATE (strength: {creative_strength:.2f}): Expansive, modulated audio")
-                self.board[0].threshold_db = -24
-                self.board[0].ratio = 2.5
-                self.board[1].gain_db = -0.5
-                self.board[2].gain_db = 0.3 + (creative_strength * 0.4)
-                self.board[3].mix = self.clamp(0.2 + (creative_strength * 0.2), 0.0, 1.0)
-                self.board[3].rate_hz = 0.4 - (creative_strength * 0.15)
-                self.board[4].mix = self.clamp(0.12 + (creative_strength * 0.18), 0.0, 1.0)
-                self.board[5].mix = self.clamp(0.15 + (creative_strength * 0.15), 0.0, 1.0)
-                self.board[6].wet_level = self.clamp(0.2 + (creative_strength * 0.2), 0.0, 1.0)
-                self.board[6].room_size = self.clamp(0.45 + (creative_strength * 0.3), 0.0, 1.0)
-                self.board[7].gain_db = -0.5
+                print("🎨 CREATIVE STATE: Expansive, modulated audio")
+                self.board[0].threshold_db = -25  # Minimal compression
+                self.board[0].ratio = 2
+                self.board[1].gain_db = -1.0  # Reduced bass for airiness
+                self.board[2].gain_db = 1.0  # Slight treble emphasis
+                self.board[3].mix = self.clamp(0.4, 0.0, 1.0)  # Strong chorus
+                self.board[3].rate_hz = 0.3  # Slower modulation
+                self.board[4].mix = self.clamp(0.35, 0.0, 1.0)  # Strong phaser
+                self.board[5].mix = self.clamp(0.3, 0.0, 1.0)  # Noticeable delay
+                self.board[6].wet_level = self.clamp(0.4, 0.0, 1.0)  # Lots of reverb
+                self.board[6].room_size = self.clamp(0.8, 0.0, 1.0)
+                self.board[7].gain_db = -1.0  # Slightly quieter
                 
             elif mental_state == "drowsy":
                 # DROWSY: Soft, distant, dreamlike
-                drowsy_strength = self.clamp(creativity * 1.1, 0.0, 1.0)  # Reduced multiplier
-                print(f"💤 DROWSY STATE (strength: {drowsy_strength:.2f}): Soft, distant audio")
-                self.board[0].threshold_db = -26
-                self.board[0].ratio = 2.0
-                self.board[1].gain_db = -1.5
-                self.board[2].gain_db = -1.0
-                self.board[3].mix = self.clamp(0.25 + (drowsy_strength * 0.15), 0.0, 1.0)
-                self.board[3].rate_hz = 0.35
-                self.board[4].mix = self.clamp(0.2 + (drowsy_strength * 0.15), 0.0, 1.0)
-                self.board[5].mix = self.clamp(0.2 + (drowsy_strength * 0.12), 0.0, 1.0)
-                self.board[6].wet_level = self.clamp(0.25 + (drowsy_strength * 0.25), 0.0, 1.0)
-                self.board[6].room_size = self.clamp(0.5 + (drowsy_strength * 0.25), 0.0, 1.0)
-                self.board[7].gain_db = -1.5
+                print("💤 DROWSY STATE: Soft, distant audio")
+                self.board[0].threshold_db = -30  # Very little compression
+                self.board[0].ratio = 1.5
+                self.board[1].gain_db = -3.0  # Reduced bass
+                self.board[2].gain_db = -2.0  # Reduced treble
+                self.board[3].mix = self.clamp(0.5, 0.0, 1.0)  # Maximum chorus
+                self.board[3].rate_hz = 0.2  # Very slow
+                self.board[4].mix = self.clamp(0.45, 0.0, 1.0)  # Maximum phaser
+                self.board[5].mix = self.clamp(0.4, 0.0, 1.0)  # Strong delay
+                self.board[6].wet_level = self.clamp(0.6, 0.0, 1.0)  # Heavy reverb
+                self.board[6].room_size = self.clamp(0.9, 0.0, 1.0)
+                self.board[7].gain_db = -3.0  # Quieter
                 
             else:  # neutral
                 # NEUTRAL: Balanced, natural
@@ -584,10 +571,18 @@ class MuseStreamManager:
                 (mental_state, attention, relaxation, creativity,
                  delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm) = self.calculate_mental_states()
                 
-                # Send data to plotter if enabled
-                if self.enable_plotting and self.plotter:
-                    self.plotter.update_data(mental_state, attention, relaxation, creativity,
-                                           delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
+                # Send data to plotter if available (but less frequently to avoid overloading)
+                if self.data_store and hasattr(self, 'last_plot_time'):
+                    current_time = time.time()
+                    if current_time - self.last_plot_time > 0.1:  # Send every 100ms
+                        self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity,
+                                                        delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
+                        self.last_plot_time = current_time
+                elif self.data_store:
+                    # First time
+                    self.last_plot_time = time.time()
+                    self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity,
+                                                    delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
                 
                 self.update_audio_effects_based_on_mental_state(mental_state, attention, relaxation, creativity)
                 
@@ -633,26 +628,15 @@ class MuseStreamManager:
         self.audio_thread = threading.Thread(target=self.process_audio_in_realtime, daemon=True)
         self.audio_thread.start()
 
-    def start_plotter(self):
-        """Start the plotter in a separate thread"""
-        if self.enable_plotting:
-            self.plotter = BrainwavePlotter(self)
-            # Run plotter in main thread (required for PyQt)
-            self.plotter.run()
-
     def start(self):
         """Starts the detection and streaming process."""
         print(f"⏳ Attempting to connect to live stream on {self.ip}:{self.port}...")
-        print("🧠 WAVE-SPECIFIC NORMALIZATION ACTIVE:")
-        print("   📊 Delta: 50 (high amplitude) | Theta: 30 | Alpha: 20 | Beta: 10 | Gamma: 5 (low)")
-        print("   🎯 Dynamic calibration will adapt to your brain's unique patterns")
-        print("   🧠 States: FOCUSED • RELAXED • CREATIVE • DROWSY • NEUTRAL")
-        
-        # Start plotter if enabled
-        if self.enable_plotting:
-            plotter_thread = threading.Thread(target=self.start_plotter, daemon=True)
-            plotter_thread.start()
-            time.sleep(2)  # Give plotter time to initialize
+        print("🧠 Advanced Brainwave Analysis Active:")
+        print("   🎯 FOCUSED: Beta/Gamma = Clear, punchy audio")
+        print("   😌 RELAXED: Alpha = Warm, smooth audio") 
+        print("   🎨 CREATIVE: Theta/Alpha = Expansive, modulated audio")
+        print("   💤 DROWSY: Theta/Delta = Soft, distant audio")
+        print("   ⚖️ NEUTRAL: Balanced audio")
         
         self.start_audio_processing()
         
@@ -663,7 +647,7 @@ class MuseStreamManager:
 
         if stream_found:
             self.mode = "live"
-            print("✅ Live stream detected. Calibrating and analyzing mental states...")
+            print("✅ Live stream detected. Analyzing mental states...")
             try:
                 while True:
                     time.sleep(1) 
@@ -722,9 +706,13 @@ class MuseStreamManager:
             (mental_state, attention, relaxation, creativity,
              delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm) = self.calculate_mental_states()
             
-            calibration_status = "CALIBRATED" if self.is_calibrated else "CALIBRATING"
-            print(f"🧠 [{datetime.now().strftime('%H:%M:%S')}] {mental_state.upper():8} [{calibration_status}] | "
+            print(f"🧠 [{datetime.now().strftime('%H:%M:%S')}] {mental_state.upper():8} | "
                   f"Attention: {attention:.2f} | Relaxation: {relaxation:.2f} | Creativity: {creativity:.2f}")
+            
+            # Send data to plotter if available
+            if self.data_store:
+                self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity,
+                                                delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
 
     def play_from_csv(self):
         """Enhanced CSV playback with mental state analysis"""
@@ -769,13 +757,12 @@ class MuseStreamManager:
                         (mental_state, attention, relaxation, creativity,
                          delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm) = self.calculate_mental_states()
                         
-                        # Send data to plotter if enabled
-                        if self.enable_plotting and self.plotter:
-                            self.plotter.update_data(mental_state, attention, relaxation, creativity,
-                                                   delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
+                        # Send data to plotter if available
+                        if self.data_store:
+                            self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity,
+                                                            delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
                         
-                        calibration_status = "CALIBRATED" if self.is_calibrated else "CALIBRATING"
-                        print(f"PLAYBACK 🧠 {mental_state.upper():8} [{calibration_status}] | "
+                        print(f"PLAYBACK 🧠 {mental_state.upper():8} | "
                               f"Attention: {attention:.2f} | Relaxation: {relaxation:.2f} | Creativity: {creativity:.2f}")
                         count += 1
                         time.sleep(self.FIXED_PLAYBACK_DELAY)
@@ -787,20 +774,23 @@ class MuseStreamManager:
         finally:
             self.stop_audio.set()
 
-if __name__ == "__main__":
-    # Create reference output file
-    try:
-        board = Pedalboard([Chorus(), Reverb(room_size=0.25)])
-        with AudioFile('music.wav') as f:
-            with AudioFile('output.wav', 'w', f.samplerate, f.num_channels) as o:
-                while f.tell() < f.frames:
-                    chunk = f.read(f.samplerate)
-                    effected = board(chunk, f.samplerate, reset=False)
-                    o.write(effected)
-        print("✅ Created output.wav for reference")
-    except Exception as e:
-        print(f"⚠️ Could not create output.wav: {e}")
-        print("🎵 Continuing with real-time processing only...")
+def main():
+    """Main function that runs everything in the correct thread"""
+    # Create thread-safe data store
+    data_store = DataStore()
     
-    manager = MuseStreamManager(ip="0.0.0.0", port=3001, timeout=3.0, enable_plotting=True) 
-    manager.start()
+    # Create and start plotter in main thread
+    plotter = BrainwavePlotter(data_store)
+    
+    # Create Muse manager in a separate thread
+    muse_manager = MuseStreamManager(ip="0.0.0.0", port=3001, timeout=3.0, data_store=data_store)
+    
+    # Start Muse processing in background thread
+    muse_thread = threading.Thread(target=muse_manager.start, daemon=True)
+    muse_thread.start()
+    
+    # Run the plotter in main thread (this blocks until window is closed)
+    plotter.run()
+
+if __name__ == "__main__":
+    main()
