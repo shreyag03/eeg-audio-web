@@ -18,7 +18,9 @@ import pyqtgraph as pg
 
 # Global data store for thread-safe communication
 class DataStore(QObject):
-    data_updated = pyqtSignal(str, float, float, float, float, float, float, float, float)
+    # Emit: mental_state, attention, relaxation, creativity, drowsiness,
+    #        delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm
+    data_updated = pyqtSignal(str, float, float, float, float, float, float, float, float, float)
     
     def __init__(self):
         super().__init__()
@@ -42,7 +44,8 @@ class BrainwavePlotter:
         self.scores = {
             'attention': deque(maxlen=1000),
             'relaxation': deque(maxlen=1000),
-            'creativity': deque(maxlen=1000)
+            'creativity': deque(maxlen=1000),
+            'drowsiness': deque(maxlen=1000)
         }
         
         # PyQt setup
@@ -98,7 +101,7 @@ class BrainwavePlotter:
         self.main_widget.resize(1200, 800)
         self.main_widget.setWindowTitle("Brainwave & Mental State Monitor")
 
-    def on_data_updated(self, mental_state, attention, relaxation, creativity, delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm):
+    def on_data_updated(self, mental_state, attention, relaxation, creativity, drowsiness, delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm):
         """Handle new data from the Muse manager"""
         current_time = time.time()
         
@@ -115,6 +118,7 @@ class BrainwavePlotter:
         self.scores['attention'].append(attention)
         self.scores['relaxation'].append(relaxation)
         self.scores['creativity'].append(creativity)
+        self.scores['drowsiness'].append(drowsiness)
         
         # Debug: Print received data
         # print(f"Plotter received: {mental_state} at {current_time}")
@@ -151,7 +155,8 @@ class BrainwavePlotter:
         self.score_curves = {
             'attention': self.scores_plot.plot(pen=pg.mkPen('red', width=2), name='Attention'),
             'relaxation': self.scores_plot.plot(pen=pg.mkPen('blue', width=2), name='Relaxation'),
-            'creativity': self.scores_plot.plot(pen=pg.mkPen('green', width=2), name='Creativity')
+            'creativity': self.scores_plot.plot(pen=pg.mkPen('green', width=2), name='Creativity'),
+            'drowsiness': self.scores_plot.plot(pen=pg.mkPen('yellow', width=2), name='Drowsiness')
         }
         
         self.scroll_layout.addWidget(self.scores_plot)
@@ -226,7 +231,7 @@ class BrainwavePlotter:
         
         # Update scores plot
         for score_type, curve in self.score_curves.items():
-            if self.scores[score_type] and len(self.scores[score_type]) > valid_indices[0]:
+            if self.scores.get(score_type) and len(self.scores[score_type]) > valid_indices[0]:
                 # Get only the data within our time window
                 score_data = [self.scores[score_type][i] for i in valid_indices if i < len(self.scores[score_type])]
                 if len(score_data) == len(x_data):
@@ -277,7 +282,8 @@ class BrainwavePlotter:
             if self.scores['attention']:
                 status_text = (f"Status: Attention: {self.scores['attention'][-1]:.2f} | "
                              f"Relaxation: {self.scores['relaxation'][-1]:.2f} | "
-                             f"Creativity: {self.scores['creativity'][-1]:.2f}")
+                             f"Creativity: {self.scores['creativity'][-1]:.2f} | "
+                             f"Drowsiness: {self.scores['drowsiness'][-1]:.2f}")
                 self.status_label.setText(status_text)
 
     def save_data(self):
@@ -292,8 +298,8 @@ class BrainwavePlotter:
         if save_path:
             with open(save_path, 'w', newline='') as file:
                 writer = csv.writer(file)
-                # Write header
-                writer.writerow(['timestamp', 'mental_state', 'attention', 'relaxation', 'creativity',
+                # Write header (include drowsiness)
+                writer.writerow(['timestamp', 'mental_state', 'attention', 'relaxation', 'creativity', 'drowsiness',
                                'delta', 'theta', 'alpha', 'beta', 'gamma'])
                 
                 # Convert deques to lists for indexing
@@ -302,6 +308,7 @@ class BrainwavePlotter:
                 scores_attention = list(self.scores['attention'])
                 scores_relaxation = list(self.scores['relaxation'])
                 scores_creativity = list(self.scores['creativity'])
+                scores_drowsiness = list(self.scores['drowsiness'])
                 brainwave_delta = list(self.brainwave_data['delta'])
                 brainwave_theta = list(self.brainwave_data['theta'])
                 brainwave_alpha = list(self.brainwave_data['alpha'])
@@ -316,6 +323,7 @@ class BrainwavePlotter:
                         scores_attention[i] if i < len(scores_attention) else '',
                         scores_relaxation[i] if i < len(scores_relaxation) else '',
                         scores_creativity[i] if i < len(scores_creativity) else '',
+                        scores_drowsiness[i] if i < len(scores_drowsiness) else '',
                         brainwave_delta[i] if i < len(brainwave_delta) else '',
                         brainwave_theta[i] if i < len(brainwave_theta) else '',
                         brainwave_alpha[i] if i < len(brainwave_alpha) else '',
@@ -410,8 +418,8 @@ class MuseStreamManager:
     def calculate_mental_states(self):
         """Calculate comprehensive mental states based on all brainwaves"""
         if None in [self.latest_delta, self.latest_theta, self.latest_alpha, 
-                   self.latest_beta, self.latest_gamma]:
-            return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
+               self.latest_beta, self.latest_gamma]:
+            return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
         
         try:
             # Calculate averages across electrodes
@@ -425,7 +433,7 @@ class MuseStreamManager:
             total_power = delta_avg + theta_avg + alpha_avg + beta_avg + gamma_avg
             
             if total_power == 0:
-                return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
+                return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
             
             # Calculate relative percentages
             delta_rel = delta_avg / total_power
@@ -443,8 +451,8 @@ class MuseStreamManager:
             
             # Mental state calculations based on brainwave research:
             
-            # 1. ATTENTION SCORE: Beta/Gamma dominance = focused attention
-            attention_score = self.clamp((beta_rel * 0.6 + gamma_rel * 0.4) * 2, 0.0, 1.0)
+            # 1. ATTENTION SCORE: Beta dominance = focused attention
+            attention_score = self.clamp((beta_rel * 0.6 + gamma_rel * 0.4) * 2.5, 0.0, 1.0)
             
             # 2. RELAXATION SCORE: Alpha dominance = relaxed, calm
             relaxation_score = self.clamp(alpha_rel * 1.5, 0.0, 1.0)
@@ -453,7 +461,7 @@ class MuseStreamManager:
             creativity_score = self.clamp((theta_rel * 0.5 + alpha_rel * 0.5) * 1.5, 0.0, 1.0)
             
             # 4. DROWSINESS: Theta/Delta dominance = sleepy, drowsy
-            drowsiness_score = self.clamp((theta_rel * 0.6 + delta_rel * 0.4) * 2, 0.0, 1.0)
+            drowsiness_score = self.clamp((theta_rel * 0.6 + delta_rel * 0.4) * 1, 0.0, 1.0)
             
             # Determine primary mental state
             scores = {
@@ -468,13 +476,13 @@ class MuseStreamManager:
             # Only classify if score is significant
             if scores[primary_state] < 0.3:
                 primary_state = "neutral"
-            
-            return (primary_state, attention_score, relaxation_score, creativity_score,
+
+            return (primary_state, attention_score, relaxation_score, creativity_score, drowsiness_score,
                    delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
             
         except Exception as e:
             print(f"❌ Error calculating mental states: {e}")
-            return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
+            return "neutral", 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5
 
     def update_audio_effects_based_on_mental_state(self, mental_state, attention, relaxation, creativity):
         """Update audio effects based on comprehensive mental state analysis"""
@@ -568,20 +576,20 @@ class MuseStreamManager:
                     raise sd.CallbackStop()
                 
                 # Update effects based on current mental state
-                (mental_state, attention, relaxation, creativity,
+                (mental_state, attention, relaxation, creativity, drowsiness,
                  delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm) = self.calculate_mental_states()
                 
                 # Send data to plotter if available (but less frequently to avoid overloading)
                 if self.data_store and hasattr(self, 'last_plot_time'):
                     current_time = time.time()
                     if current_time - self.last_plot_time > 0.1:  # Send every 100ms
-                        self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity,
+                        self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity, drowsiness,
                                                         delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
                         self.last_plot_time = current_time
                 elif self.data_store:
                     # First time
                     self.last_plot_time = time.time()
-                    self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity,
+                    self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity, drowsiness,
                                                     delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
                 
                 self.update_audio_effects_based_on_mental_state(mental_state, attention, relaxation, creativity)
@@ -703,16 +711,16 @@ class MuseStreamManager:
             self.latest_alpha is not None and self.latest_beta is not None and 
             self.latest_gamma is not None):
             
-            (mental_state, attention, relaxation, creativity,
+            (mental_state, attention, relaxation, creativity, drowsiness,
              delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm) = self.calculate_mental_states()
-            
+
             print(f"🧠 [{datetime.now().strftime('%H:%M:%S')}] {mental_state.upper():8} | "
-                  f"Attention: {attention:.2f} | Relaxation: {relaxation:.2f} | Creativity: {creativity:.2f}")
-            
+                f"Attention: {attention:.2f} | Relaxation: {relaxation:.2f} | Creativity: {creativity:.2f} | Drowsiness: {drowsiness:.2f}")
+
             # Send data to plotter if available
             if self.data_store:
-                self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity,
-                                                delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
+                self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity, drowsiness,
+                                    delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
 
     def play_from_csv(self):
         """Enhanced CSV playback with mental state analysis"""
@@ -754,16 +762,16 @@ class MuseStreamManager:
                         self.latest_alpha is not None and self.latest_beta is not None and 
                         self.latest_gamma is not None):
                         
-                        (mental_state, attention, relaxation, creativity,
+                        (mental_state, attention, relaxation, creativity, drowsiness,
                          delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm) = self.calculate_mental_states()
-                        
+
                         # Send data to plotter if available
                         if self.data_store:
-                            self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity,
-                                                            delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
-                        
+                            self.data_store.data_updated.emit(mental_state, attention, relaxation, creativity, drowsiness,
+                                                delta_norm, theta_norm, alpha_norm, beta_norm, gamma_norm)
+
                         print(f"PLAYBACK 🧠 {mental_state.upper():8} | "
-                              f"Attention: {attention:.2f} | Relaxation: {relaxation:.2f} | Creativity: {creativity:.2f}")
+                            f"Attention: {attention:.2f} | Relaxation: {relaxation:.2f} | Creativity: {creativity:.2f} | Drowsiness: {drowsiness:.2f}")
                         count += 1
                         time.sleep(self.FIXED_PLAYBACK_DELAY)
                         
